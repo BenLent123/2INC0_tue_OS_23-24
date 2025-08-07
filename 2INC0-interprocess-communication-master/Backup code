@@ -1,0 +1,386 @@
+//Creates circular buffers for data transfers
+req_queue_T21 buffer_c2d[10];   int count1 = 0; int size_req = sizeof(req_queue_T21);
+S1_queue_T21 buffer_d2w[10];   int count2 = 0; int size_s1 = sizeof(S1_queue_T21);
+S2_queue_T21 buffer_d2w2[10];  int count22 = 0; int size_s12 = sizeof(S2_queue_T21);
+Rsp_queue_T21 buffer_w2d[10]; int in_w2d = 0; int out_w2d = 0; int count3 = 0; int size_rsp = sizeof(Rsp_queue_T21);
+
+void c2d_thread(mqd_t mq_c2d){
+	//Description:
+	//This thread transfer data from c2d queue into c2d buffer
+	//The buffer is a circular buffer, so data does not need to be wiped, it will be overwritten in subsequent passes
+	//If(count1<10) statement is used to make sure that the buffer is not overloaded
+	//Since Count1 and the queues are shared variables they are protected with mutex
+	//mq_recieve does blocking read of client queue. If the queue is empty, this thread sleeps and other threads are processed
+	//The mutex is unlocked before in_c2d (pointer to first free spot on the buffer) is incremented as in_c2d is local var
+	//If the c2d buffer is full, the thread sleeps for 10 microseconds to allow forwarding thread to unload the buffer
+	
+	int in_c2d = 0;
+	while(true){
+		pthread_mutex_lock(&m); //Critical section start
+		if(count1<10) { 
+			mq_receive(mg_c2d, &buffer_c2d[in_c2d], size_req, NULL); 
+			++count1;
+			pthread_mutex_unlock(&m); //Critical section end (on this branch)
+			in_c2d = (in_c2d+1)%10;
+			} 
+		else sleep(0.00001);
+	}
+}
+
+void forwarding_thread(){
+	//Description:
+	//It extracts data from the c2d buffer, processes it to the format needed by workers, then puts it in d2w buffers
+	req_queue_T21 req;
+	S1_queue_T21 rsp;
+	S2_queue_T21 rsp2;
+	int out_c2d = 0;
+	int in_d2w = 0;
+	int in_d2w2 = 0;
+	while(true){
+		pthread_mutex_lock(&m); //Critical section start
+		if(count1>0) {
+			if(buffer_c2d[out].service_id == 1){
+				rsp.request_id = buffer_c2d[out].request_id;
+				rsp.data = buffer_c2d[out].data;
+				--count1;
+				buffer_d2w[in] = rsp;
+				++count2;
+				pthread_mutex_unlock(&m); //Critical section end (on this branch)
+
+				out_c2d = (out_c2d+1)%10; 
+				in_d2w = (in_d2w+1)%10;
+				}
+			//buffer for S2
+			else if (buffer_c2d[out].service_id == 2){
+				rsp2.request_id = buffer_c2d[out].request_id;
+				rsp2.data = buffer_c2d[out].data;
+				--count1;
+				buffer_d2w2[in] = rsp2;
+				++count22;
+				pthread_mutex_unlock(&m); //Critical section end (on this branch)
+
+				in_d2w2 = (in_d2w2+1)%10;
+				out_c2d = (out_c2d+1)%10;
+				}
+			} 
+		else sleep(0.00001);
+	}
+}
+
+
+
+void d2w_thread(mqd_t mq_d2w){
+	//Description:
+	//This thread transfers data from d2w buffer to d2w/S1 queue
+	int out_d2w = 0;
+	while(true){
+		pthread_mutex_lock(&m); ////Critical section start
+		if(count2>0) { 
+			mq_send(mg_d2w, &buffer_d2w[out_d2w], size_s1, NULL);
+			--count2;
+			pthread_mutex_unlock(&m); //Critical section end (on this branch)
+			out_d2w = (out_d2w+1)%10;
+	      } 
+	  else sleep(0.00001);
+  }
+}
+
+void d2w2_thread(mqd_t mq_d2w2){
+	//Description:
+	//This thread transfers data from d2w2 buffer to d2w2/S2 queue
+	int out_d2w2 = 0;
+	while(true){
+		pthread_mutex_lock(&m); ////Critical section start
+		if(count22>0) { 
+			mq_send(mg_d2w2, &buffer_d2w2[out_d2w2], size_s12, NULL);
+			--count22;
+			pthread_mutex_unlock(&m); //Critical section end (on this branch)
+			out_d2w2 = (out_d2w2+1)%10;
+	      } 
+	  else sleep(0.00001);
+  }
+}
+
+// in main
+
+pthread_t c2dthread; pthread_t d2wthread; pthread_t d2w2thread;
+
+(pthread_create(&c2dthread, NULL, c2d_thread(), mq_c2d) == 0) &&
+	(pthread_create(&d2wthread, NULL, d2w_thread(), attr_d2w)  == 0) &&
+	(pthread_create(&d2w2thread, NULL, d2w2_thread(), attr_d2w2)  == 0) &&
+	
+  if(pthread_cancel(c2dthread)==0){printf("C2D thread terminated");};
+  else {perror("c2d thread not terminated");}
+  
+    if(pthread_cancel(d2wthread)==0){printf("D2W thread terminated");};
+  else {perror("D2W thread not terminated");}
+  
+    if(pthread_cancel(d2w2thread)==0){printf("D2W2 thread terminated");};
+  else {perror("D2W2 thread not terminated");}
+  
+  if(mq_unlink(client2dealer_name) != 0) {perror("c2d queue not unlinked");}
+  if(mq_close(client2dealer_name)!=0)    {perror("c2d queue not closed");}
+ 
+  if(mq_unlink(dealer2worker1_name) != 0){perror("D2W queue not unlinked");}
+  if(mq_close(dealer2worker1_name)!=0)   {perror("D2W queue not closed");}
+
+  if(mq_unlink(dealer2worker2_name) != 0){perror("D2W2 queue not unlinked");}
+  if(mq_close(dealer2worker2_name)!=0)   {perror("D2W2 queue not closed");}
+  
+  if(mq_unlink(worker2dealer_name) != 0) {perror("W2D queue not unlinked");}
+  if(mq_close(worker2dealer_name)!=0)    {perror("W2D queue not closed");}
+  if(pthread_cancel(w2dthread)!=0)       {perror("W2D thread not terminated");}
+  
+              else
+            {
+                // Sleep briefly to prevent busy waiting
+                usleep(1);
+            }
+            
+            
+            mq_close(rsp_channel);
+            mq_close(req_channel);
+            exit(EXIT_FAILURE);
+            
+                    //else if (errno != EAGAIN && errno != EWOULDBLOCK)
+        //{
+        //    perror("Router-Dealer: mq_receive from client");
+        //}
+		//count_rsp_q = num_recieved - num_dropped - num_processed;
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		/* 
+ * Operating Systems  (2INCO)  Practical Assignment
+ * Interprocess Communication
+ *
+ * Nitin Singhal (1725963)
+ * Daniel Tyukov (1819283)
+ * Ben Lentschig (1824805)  
+ *
+ * Grading:
+ * Your work will be evaluated based on the following criteria:
+ * - Satisfaction of all the specifications
+ * - Correctness of the program
+ * - Coding style
+ * - Report quality
+ * - Deadlock analysis
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <errno.h>      // for perror()
+#include <unistd.h>     // for getpid()
+#include <mqueue.h>     // for mq-stuff
+#include <time.h>       // for time()
+
+#include "messages.h"
+#include "service2.h"
+
+static void rsleep (int t);
+
+int main (int argc, char * argv[])
+{    
+    Rsp_queue_T21 rsp;
+    S2_queue_T21 req;
+
+    mqd_t req_channel   = mq_open(argv[1], O_RDONLY);
+    if(req_channel == (mqd_t)-1){
+        perror("worker 2 - request channel opening failed");
+        exit(EXIT_FAILURE);
+    } else{perror("worker 2 - request channel opening succeeded");}
+
+    mqd_t rsp_channel   = mq_open(argv[2], O_WRONLY);
+    if(rsp_channel == (mqd_t)-1){
+        perror("worker 2 - response channel opening failed");
+        exit(EXIT_FAILURE);
+    }else{perror("worker 2 - response channel opening succeeded");}
+    
+    while((1)){
+        if(mq_receive(req_channel, (char*)&req, sizeof(S2_queue_T21),0) == -1){
+            perror("worker 2 - receiving failed");
+        }
+
+        if(req.request_id != -1){
+            rsleep(10000);
+            rsp.result = service(req.data);
+            rsp.request_id = req.request_id;
+            if(mq_send(rsp_channel, (char*)&rsp, sizeof(Rsp_queue_T21),0) == -1){
+            perror("worker 2 - sending failed");
+            }
+            //printf("worker 2 sent work\n");
+        } else{
+            //printf("kill signal received W2 \n");
+            break;
+        }
+    }
+    mq_close(rsp_channel);
+    mq_close(req_channel); 
+    return 0;   
+}
+
+/*
+ * rsleep(int t)
+ *
+ * The calling thread will be suspended for a random amount of time
+ * between 0 and t microseconds
+ * At the first call, the random generator is seeded with the current time
+ */
+static void rsleep (int t)
+{
+    static bool first_call = true;
+    
+    if (first_call == true)
+    {
+        srandom (time (NULL) % getpid ());
+        first_call = false;
+    }
+    usleep (random() % t);
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+
+%The execution point of the router, workers and clients are tracked with $deal[n]$, $work[n]$ and $client[n]$, where the value of the variables is the number of the atomic statement in the task that was last executed.
+    %%%%%FUCK ME%%%%%%%%%%%%%%
+    
+    
+    Each variable on the \textbf{start} of the n-th step is notated as $variable\_name[n]$. The number of steps have been counted assuming livelock conditions hold. These conditions cause many instructions in if statements to be skipped.\\
+
+    In the router, a livelock implies that through a whole loop, no progress was made, thus the read client section, send data to workers section, the read response queue sections all failed and the loop won't be exited. Thus, after n steps of the router (giving a whole number of loops), the following conditions for livelock are yielded
+
+    \begin{equation}
+        \begin{split} \label{cond:router}
+            ((count\_req[n+1] \geq cap\_req[n+1]) \lor (bytes\_read\_req[n+2] \leq 0) ) \land \\
+            ((count\_req[n+3] \leq 0) \lor (mq\_sent\_d[n+7] = -1) )  \land \\
+            (bytes\_read\_rsp[n+9] \leq 0) \land \\
+            ((client\_status[n+10] = 1) \lor \lnot(num\_processed[n+11] = num\_recieved[n+11]))
+        \end{split}
+    \end{equation}
+
+    Note, $(bytes\_read\_req[n+2] \leq 0) \Rightarrow (q\_req[n+2] = 0)$ and $(bytes\_read\_rsp[n+9] \leq 0) \Rightarrow (q\_rsp[n+9] = 0)$ \\
+
+    In the worker, there will be no progress if no job is popped from the queue, the worker does not terminate (request\_id = -1 is the termination signal) and nothing is sent. Thus, after k steps (forming a whole number of loops)
+
+    \begin{equation}
+        \begin{split}\label{cond:worker}
+            (
+            (\lnot(mq\_sent[k+1] = 0) \land \lnot(mq\_recieved\_w[k+2] = -1) \land \lnot(mq\_sent[k+8] = 0)) \lor (mq\_recieved\_w[k+3] = -1)
+            ) \land \\
+            \lnot(req.request\_id[k+3] = -1) 
+        \end{split}
+    \end{equation}
+
+    Note, $(mq\_sent[k+1] = 0) \Rightarrow (q\_rsp[k+1] = full)$ and $(mq\_recieved\_w[k+3] = -1) \Rightarrow (q\_work[k+3] = 0)$ \\
+
+     Live locking implies that the router and worker will execute an infinite number of loops while the client is terminated. We can already see $(count\_req[n+1] \geq cap\_req[n+1]) \land (count\_req[n+3] \leq 0)$ is impossible. The only statement that modifies the count between steps n+1 and n+3 is statement 6, which is forbidden under livelock as it could only happen if job requests were read. \\
+
+     We can simplify $(A \lor B) \land (C \lor D)$ to $(A \land C) \lor (A \land D) \lor (B \land C) \lor (B \land D)$. $A \land C$ is disallowed, so 
+
+     We pick to begin analyzing the execution of the program when the dealer has completed n steps, the worker k steps, such that n steps form a whole number of router loops, while k is arbitrary. The router executes now \\
+
+    \begin{lstlisting}
+        if(count_req<cap_req)
+    \end{lstlisting}
+
+    If this succeeds, then mq\_receive() is performed. Due to livelock, the receive must fail. If the statement fails, then the next 
+
+    \begin{lstlisting}
+        if(count_req>0)
+    \end{lstlisting}
+    
+    must succeed. This is because
+    
+
+    
+    and succeed. In the former case, no matter how many loops of the client are executed, 
+    \begin{lstlisting}
+        bytes_read_req = mq_receive(mq_c2d, (char *) &req[in])
+    \end{lstlisting}
+
+    will succeed since the client 2 router queue is full (necessary to block the client) and the client can't unrequest jobs. Then condition \ref{cond:router}is broken and progress is made. In the latter case, we execute
+    \begin{lstlisting}
+        mq_sent_d = mq_send(mq_d2w, (char*) &s1_req);
+    \end{lstlisting}
+
+    $mq\_recieved\_w[k] = -1$ from condition \ref{cond:worker} implies that the worker queue is empty, thus mq\_send() in the router succeeds, yeilding progress. Any number of concurrent executions of the client or worker won't fill the worker queue. \\
+
+    
+\end{proof}
+%The logic is actually a little hard. I'm thinking how to approach this
+%Yeah I need to show the worker code and client code to make my argument
+
+
+%    If the worker were not locked, then at some point less than k loops later, it will either pop a task from the worker queue, or push a result onto the response queue. Then, either $\lnot(mq\_sent[n+k] = -1)$ because a slot on the worker queue opened, or $\lnot(bytes\_read\_rsp[n] \leq 0)$ because a response was published. In the latter case, 
+
+ %   If the client is not livelocked, then at some point k loops later, it will send either a job request or terminate. Then either $(client\_status[n+k] != 1)$, or $(bytes\_read\_req[n] > 0)$.
+    
+    
+
+%There are 4 resources which can theoretically be accessed in a way as to cause deadlock. The client to dealer queue, the dealer to worker queue (only 1 is considered), the response queue and the buffer. There is also the theoretical possibility of a livelock where the router loops through the code without making progress, forever. We can model the problem with a resource allocation graph. \\
+
+%Each queue is modeled with 2 semaphores (to enforce the invariants of a minimum item count and maximum capacity) and a mutex. Semaphore $A_i$ enforces a maximum count on the $i$-th data storage, while semaphore $B_i$ enforces a minimum (0 for all of them). The client to dealer queue is data store 0, queue S1 is data store 1, S2 is data store 2, the response queue is data store 3. \\
+
+%Since the queues are opened in non-blocking mode, all calls to the queue model semaphores and mutexes are non-blocking. \\
+
+
+
+
+
+%The tasks that compete for them are processes. There are 4 queues and 1 buffer (local to the router_dealer). The buffer is not shared, but is still modeled \\
+
+%Each queue and buffer is modeled as 3 resources, i.e. 2 sempahores and 1 mutex. The semaphores enforce invariants on the number of objects in the queue/buffer (a min and a max), while the mutex prevent race conditions. The requests to these resources can be blocking or non-blocking (lock() and wait() or trylock() and trywait()). \\
+
+
+
+
+%Tasks pushing to a queue/buffer use wait() (or trywait()), while tasks poping from 
+
+
